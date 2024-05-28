@@ -41,59 +41,61 @@ async function connectToWhatsApp() {
         await sock.sendMessage('59169973651@c.us', { text: 'Hello there!' })
     })
 
-    // Crear el servidor HTTP
-    const server = http.createServer((req, res) => {
-        if (req.url === '/send-message' && req.method === 'POST') {
-            let body = '';
-            req.on('data', chunk => {
-                body += chunk.toString();
-            });
-
-            req.on('end', async () => {
-                try {
-                    const reqData = JSON.parse(body);
-                    let contactId;
-
-                    if (reqData.contact_type === 'group') {
-                        // es un grupo
-                        contactId = reqData.contact_id + '@g.us';
-                    } else if (reqData.contact_type === 'contact') {
-                        // es un contacto
-                        contactId = reqData.contact_id.replace(/\+/g, "") + '@s.whatsapp.net';
-                    }
-
-                    let messageOptions;
-                    if (reqData.message_type === 'static') {
-                        messageOptions = { text: reqData.message };
-                    } else if (reqData.message_type === 'customized') {
-                        const message = buildMessageTemplate(reqData.message_template, reqData);
-                        messageOptions = { text: message };
-                    } else {
-                        res.writeHead(400, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify({ status: 'error', message: 'Tipo de mensaje no válido' }));
-                        return;
-                    }
-
-                    await sock.sendMessage(contactId, messageOptions);
-
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ status: 'success', message: 'Mensaje enviado correctamente' }));
-                } catch (error) {
-                    console.error('Error procesando la solicitud:', error);
-                    res.writeHead(500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ status: 'error', message: 'Error procesando la solicitud' }));
-                }
-            });
-        } else {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ status: 'error', message: 'URL no encontrada' }));
-        }
-    });
-
-    server.listen(port, () => {
-        console.log(`Servidor escuchando en http://localhost:${port}`);
-    });
 }
 
 // Ejecutar la función de conexión a WhatsApp
 connectToWhatsApp();
+
+// Crear el servidor HTTP
+const server = http.createServer((req, res) => {
+    if (req.url === '/send-message' && req.method === 'POST') {
+        console.log('Hola desde el send-message')
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+
+        req.on('end', async () => {
+            try {
+                const reqData = JSON.parse(body);
+                let contactId;
+
+                if (reqData.contact_type === 'group') {
+                    // es un grupo
+                    contactId = reqData.contact_id + '@g.us';
+                } else if (reqData.contact_type === 'contact') {
+                    // es un contacto
+                    contactId = reqData.contact_id.replace(/\+/g, "") + '@s.whatsapp.net';
+                }
+
+                let messageOptions;
+                if (reqData.message_type === 'static') {
+                    messageOptions = { text: reqData.message };
+                } else if (reqData.message_type === 'customized') {
+                    const message = buildMessageTemplate(reqData.message_template, reqData);
+                    messageOptions = { text: message };
+                } else {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ status: 'error', message: 'Tipo de mensaje no válido' }));
+                    return;
+                }
+
+                await sock.sendMessage(contactId, messageOptions);
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ status: 'success', message: 'Mensaje enviado correctamente' }));
+            } catch (error) {
+                console.error('Error procesando la solicitud:', error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ status: 'error', message: 'Error procesando la solicitud' }));
+            }
+        });
+    } else {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', message: 'URL no encontrada' }));
+    }
+});
+
+server.listen(port, () => {
+    console.log(`Servidor escuchando en http://localhost:${port}`);
+});
