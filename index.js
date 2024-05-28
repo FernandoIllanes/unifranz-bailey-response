@@ -41,12 +41,7 @@ async function connectToWhatsApp() {
         await sock.sendMessage('59169973651@c.us', { text: 'Hello there!' })
     })
 
-}
-
-// Ejecutar la función de conexión a WhatsApp
-connectToWhatsApp();
-
-// Crear el servidor HTTP
+    // Crear el servidor HTTP
 const server = http.createServer((req, res) => {
     if (req.url === '/send-message' && req.method === 'POST') {
         console.log('Hola desde el send-message')
@@ -99,3 +94,8 @@ const server = http.createServer((req, res) => {
 server.listen(port, () => {
     console.log(`Servidor escuchando en http://localhost:${port}`);
 });
+
+}
+
+// Ejecutar la función de conexión a WhatsApp
+connectToWhatsApp();
