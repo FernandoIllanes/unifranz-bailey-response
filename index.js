@@ -29,9 +29,17 @@ async function connectToWhatsApp() {
         } else if (connection === 'open') {
             console.log('opened connection');
         }
+        
     });
 
     sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('messages.upsert', async m => {
+        if (m.messages[0].key.fromMe) return
+        console.log(JSON.stringify(m, undefined, 2))
+
+        console.log('replying to', m.messages[0].key.remoteJid)
+        await sock.sendMessage('59169973651@c.us', { text: 'Hello there!' })
+    })
 
     // Crear el servidor HTTP
     const server = http.createServer((req, res) => {
