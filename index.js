@@ -1,101 +1,143 @@
+const {
+    default: makeWASocket,
+    DisconnectReason,
+    useMultiFileAuthState,
+} = require('@whiskeysockets/baileys');
+
+const express = require('express');
+const fileUpload = require('express-fileupload');
+const cors = require('cors');
+const bodyParser = require('body-parser');
 const http = require('http');
-const { DisconnectReason, makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const port = 3004;
+const qrcode = require('qrcode');
+const socketIO = require('socket.io');
 
-// Función para realizar el reemplazo de variables en un mensaje
-function buildMessageTemplate(template, values) {
-    return template.replace(/{([^{}]*)}/g, (match, key) => {
-        return values[key] || match;
-    });
-}
+const app = express();
+app.use(fileUpload({ createParentPath: true }));
+app.use(cors());
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use('/assets', express.static(__dirname + '/client/assets'));
 
-// Función para conectar a WhatsApp
+const server = http.createServer(app);
+const io = socketIO(server);
+const port = process.env.PORT || 8000;
+
+app.get('/scan', (req, res) => {
+    res.sendFile('./client/index.html', { root: __dirname });
+});
+
+app.get('/', (req, res) => {
+    res.send('server working');
+});
+
+let sock;
+let qrDinamic;
+let soket;
+
 async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-    const sock = makeWASocket({
-        printQRInTerminal: true,
+    const { state, saveCreds } = await useMultiFileAuthState('session_auth_info');
+    sock = makeWASocket({
         auth: state,
         version: [2, 2413, 1]
     });
 
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+        qrDinamic = qr;
         if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('connection closed due to ', lastDisconnect.error, ', reconnecting ', shouldReconnect);
-            if (shouldReconnect) {
+            let reason = new DisconnectReason(lastDisconnect.error).toString();
+            if (reason === DisconnectReason.badSession) {
+                console.log(`Bad Session File, Please Delete session_auth_info and Scan Again`);
+                sock.logout();
+            } else if ([DisconnectReason.connectionClosed, DisconnectReason.connectionLost, DisconnectReason.connectionReplaced, DisconnectReason.loggedOut, DisconnectReason.restartRequired, DisconnectReason.timedOut].includes(reason)) {
+                console.log(`Connection closed, reconnecting due to reason: ${reason}`);
                 connectToWhatsApp();
+            } else {
+                console.log(`Unknown disconnect reason: ${reason}`);
             }
         } else if (connection === 'open') {
-            console.log('opened connection');
+            console.log('Connection open');
+            updateQR('connected');
         }
-        
+    });
+
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type === 'notify') {
+            console.log('Mensaje entrante recibido');
+        }
     });
 
     sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('messages.upsert', async m => {
-        if (m.messages[0].key.fromMe) return
-        console.log(JSON.stringify(m, undefined, 2))
+}
 
-        console.log('replying to', m.messages[0].key.remoteJid)
-        await sock.sendMessage('59169973651@c.us', { text: 'Hello there!' })
-    })
+const isConnected = () => {
+    return !!sock?.user;
+};
 
-    // Crear el servidor HTTP
-const server = http.createServer((req, res) => {
-    if (req.url === '/send-message' && req.method === 'POST') {
-        console.log('Hola desde el send-message')
-        let body = '';
-        req.on('data', chunk => {
-            body += chunk.toString();
-        });
+function buildMessageTemplate(template, data) {
+    return template.replace(/{(\w+)}/g, (_, key) => data[key] || '');
+}
 
-        req.on('end', async () => {
-            try {
-                const reqData = JSON.parse(body);
-                let contactId;
+app.post('/send-message', async (req, res) => {
+    console.log('Hola desde el send-message');
+    try {
+        const reqData = req.body;
+        let contactId;
 
-                if (reqData.contact_type === 'group') {
-                    // es un grupo
-                    contactId = reqData.contact_id + '@g.us';
-                } else if (reqData.contact_type === 'contact') {
-                    // es un contacto
-                    contactId = reqData.contact_id.replace(/\+/g, "") + '@s.whatsapp.net';
-                }
+        if (reqData.contact_type === 'group') {
+            contactId = reqData.contact_id + '@g.us';
+        } else if (reqData.contact_type === 'contact') {
+            contactId = reqData.contact_id.replace(/\+/g, "") + '@s.whatsapp.net';
+        }
 
-                let messageOptions;
-                if (reqData.message_type === 'static') {
-                    messageOptions = { text: reqData.message };
-                } else if (reqData.message_type === 'customized') {
-                    const message = buildMessageTemplate(reqData.message_template, reqData);
-                    messageOptions = { text: message };
-                } else {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ status: 'error', message: 'Tipo de mensaje no válido' }));
-                    return;
-                }
+        let messageOptions;
+        if (reqData.message_type === 'static') {
+            messageOptions = { text: reqData.message };
+        } else if (reqData.message_type === 'customized') {
+            const message = buildMessageTemplate(reqData.message_template, reqData);
+            messageOptions = { text: message };
+        } else {
+            res.status(400).json({ status: 'error', message: 'Tipo de mensaje no válido' });
+            return;
+        }
 
-                await sock.sendMessage(contactId, messageOptions);
+        await sock.sendMessage(contactId, messageOptions);
 
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ status: 'success', message: 'Mensaje enviado correctamente' }));
-            } catch (error) {
-                console.error('Error procesando la solicitud:', error);
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ status: 'error', message: 'Error procesando la solicitud' }));
-            }
-        });
-    } else {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'error', message: 'URL no encontrada' }));
+        res.status(200).json({ status: 'success', message: 'Mensaje enviado correctamente' });
+    } catch (error) {
+        console.error('Error procesando la solicitud:', error);
+        res.status(500).json({ status: 'error', message: 'Error procesando la solicitud' });
     }
 });
 
+io.on('connection', (socket) => {
+    soket = socket;
+    if (isConnected()) {
+        updateQR('connected');
+    } else if (qrDinamic) {
+        updateQR('qr');
+    }
+});
+
+const updateQR = (data) => {
+    if (data === 'qr') {
+        qrcode.toDataURL(qrDinamic, (err, url) => {
+            soket?.emit('qr', url);
+            soket?.emit('log', 'QR recibido, escanear con WhatsApp');
+        });
+    } else if (data === 'connected') {
+        soket?.emit('qrstatus', './assets/check.svg');
+        soket?.emit('log', 'Usuario conectado');
+        const { id, name } = sock?.user;
+        soket?.emit('user', `${id} ${name}`);
+    } else if (data === 'loading') {
+        soket?.emit('qrstatus', './assets/loader.gif');
+        soket?.emit('log', 'Cargando...');
+    }
+};
+
+connectToWhatsApp().catch((err) => console.log('Error inesperado: ' + err));
 server.listen(port, () => {
     console.log(`Servidor escuchando en http://localhost:${port}`);
 });
-
-}
-
-// Ejecutar la función de conexión a WhatsApp
-connectToWhatsApp();
